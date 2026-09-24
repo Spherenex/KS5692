@@ -1,0 +1,139 @@
+"""Dash/Plotly dashboard for the KS5692 automotive network simulation."""
+import json, threading, time
+import pandas as pd
+import plotly.express as px
+from dash import Dash, Input, Output, ctx, dcc, html, dash_table, no_update
+from main import SimulationEngine
+from metrics import summarize
+from state_manager import SimulationState
+
+sim, engine, lock = SimulationState(), SimulationEngine(), threading.RLock()
+
+def worker():
+    while True:
+        with lock:
+            if sim.running and not sim.paused:
+                try: engine.tick(sim)
+                except Exception as exc: sim.log("SYSTEM", f"Isolated simulator error: {exc}")
+        time.sleep(max(.1, .75/sim.speed_factor))
+threading.Thread(target=worker, daemon=True, name="ks5692-engine").start()
+
+app=Dash(__name__,title="Secure Automotive Ethernet & OCPP Simulation",suppress_callback_exceptions=True)
+server=app.server
+PAGES=["Overview","Live Vehicle","CAN XL","Gateway","Ethernet","TSN","Performance","Security","EV Charging","OCPP & CSMS","Logs","Comparison","Reports"]
+MODES=["Normal Mode","High Traffic Mode","Cyberattack Mode","Network Failure Mode","OCPP Connection Failure Mode"]
+
+def kpis(items): return html.Div([html.Div([html.Small(a),html.Strong(str(b),className=c or "cyan")],className="kpi") for a,b,c in items],className="kpi-grid")
+def graph(i,cols=None,title="Live data"):
+ figure=line(cols,title) if cols else {"data":[],"layout":{"template":"plotly_dark","title":title,"paper_bgcolor":"#141a28","plot_bgcolor":"#101622","font":{"color":"#aeb9cb"}}}
+ return dcc.Graph(id=i,figure=figure,config={"displayModeBar":False,"responsive":True,"displaylogo":False},responsive=True,className="chart")
+def table(rows): return dash_table.DataTable(rows,page_size=15,style_table={"overflowX":"auto"},style_cell={"backgroundColor":"#0b1726","color":"#dcecff","border":"1px solid #20384f","fontFamily":"monospace","textAlign":"left","maxWidth":"380px","overflow":"hidden","textOverflow":"ellipsis"},style_header={"backgroundColor":"#10263e","fontWeight":"bold"})
+
+app.layout=html.Div([dcc.Interval(id="clock",interval=1000),dcc.Store(id="events"),html.Aside([
+ html.Div([html.Div("KS",className="logo"),html.Div([html.B("KS5692"),html.Small("NETWORK LAB")])],className="brand"),
+ html.Label("SIMULATION MODE"),dcc.Dropdown(MODES,"Normal Mode",id="mode",clearable=False,className="dark-dropdown"),html.Label("ETHERNET CAPACITY"),dcc.Dropdown([{"label":"100 Mbps","value":100},{"label":"1 Gbps","value":1000}],1000,id="capacity",clearable=False,className="dark-dropdown"),html.Label("SIMULATION SPEED"),dcc.Dropdown([{"label":f"{x:g}×","value":x} for x in [.5,1,2,5]],1,id="speed",clearable=False,className="dark-dropdown"),
+ html.Div([html.Button("START",id="start"),html.Button("PAUSE",id="pause"),html.Button("RESUME",id="resume"),html.Button("STOP",id="stop"),html.Button("RESET",id="reset")],className="controls"),html.Hr(),dcc.RadioItems(PAGES,"Overview",id="page",className="nav",labelClassName="nav-item"),html.Div("Educational software simulation; not physical or certification-level protocol validation.",className="disclaimer")],className="sidebar"),
+ html.Main([html.Header([html.Div([html.H1("Secure Automotive Ethernet & OCPP Simulation"),html.P("CAN XL • Automotive Ethernet • TSN • Security • EV Charging • OCPP 2.0.1")]),html.Div(id="status")]),html.Div(id="content")],className="main")])
+
+def overview():
+ nodes=["Vehicle ECUs","CAN XL","Security","Gateway","TSN","Automotive Ethernet","EV Charger","OCPP","CSMS"]; flow=[]
+ for i,n in enumerate(nodes):
+  flow.append(html.Div([html.B(n),html.Span(sim.modules.get(n,"ONLINE"))],className="node active" if sim.modules.get(n)=="ONLINE" else "node"))
+  if i<len(nodes)-1:flow.append(html.Div("›",className="arrow"))
+ f=sim.can_frames[0] if sim.can_frames else None;current=f"{f.source_ecu} · {f.message_id} · Priority {f.priority} · {f.authentication_status} · {sim.last_latency:.3f} ms" if f else "Waiting for simulation data"
+ return html.Div([html.H2("Integrated Communication Architecture"),html.Div(flow,className="flow"),kpis([(n,sim.modules[n],"green" if sim.modules[n]!="OFFLINE" else "muted") for n in list(sim.modules)[:6]]),html.Div([html.Small("CURRENT MESSAGE"),html.Code(current)],className="strip"),html.Details([html.Summary("Demonstration sequence"),html.P("Start → ECUs → CAN XL → gateway/security → TSN/Ethernet → connect and authorize EV → charging/OCPP → attacks → high traffic/failures → report.")],open=True,className="panel")])
+def vehicle():
+ v=sim.vehicle;return html.Div([html.H2("Live Vehicle"),kpis([("Speed",f'{v.get("speed",0):.1f} km/h',"cyan"),("Battery SOC",f'{v.get("soc",0):.2f}%',"green"),("Voltage",f'{v.get("voltage",0):.1f} V',"cyan"),("Current",f'{v.get("current",0):.1f} A',"amber"),("Motor RPM",f'{v.get("rpm",0):.0f}',"cyan"),("ADAS",f'{v.get("adas",0):.1f} Mbps',"violet")]),html.Div([graph("vehicle-a",["speed","rpm"],"Speed and RPM"),graph("vehicle-b",["soc","battery_temp","adas"],"SOC, Temperature, ADAS")],className="two")])
+def can():
+ rows=[{"Time":f.timestamp[11:23],"CAN ID":f.message_id,"Source":f.source_ecu,"Destination":f.destination,"Priority":f.priority,"Data":json.dumps(f.payload),"Counter":f.sequence_counter,"Authentication":f.authentication_status} for f in sim.can_frames]
+ return html.Div([html.H2("CAN XL Monitor"),html.P("Software CAN XL simulation—not a physical CAN implementation.",className="muted"),kpis([("Status",sim.modules["CAN XL"],"green"),("Frames",sim.stats["can"],"cyan"),("Queue",len(sim.can_frames),"amber"),("Authenticated",sim.stats["converted"],"green"),("Rejected",sim.stats["rejected"],"red")]),table(rows)])
+def gateway():
+ rows=[{"Packet":p.packet_id,"Source":p.source,"CAN ID":p.original_can_id,"Class":p.traffic_class,"Priority":p.priority,"Security":p.security_status} for p in sim.packets]
+ return html.Div([html.H2("Secure CAN XL / Ethernet Gateway"),html.Div([html.Div(x,className="node") for x in ["ECU ↓","CAN XL ↓","SECURITY ↓","GATEWAY ↓","ETHERNET"]],className="flow"),kpis([("Received",sim.stats["can"],"cyan"),("Converted",sim.stats["converted"],"green"),("Rejected",sim.stats["rejected"],"red"),("Latency",f"{sim.last_latency:.3f} ms","amber")]),table(rows)])
+def ethernet():
+ traffic=sim.vehicle.get("adas",0)+18;util=min(100,traffic/sim.capacity*100);fail=sim.mode=="Network Failure Mode"
+ return html.Div([html.H2("Automotive Ethernet"),kpis([("Link","FAILURE" if fail else sim.modules["Automotive Ethernet"],"red" if fail else "green"),("Capacity",f"{sim.capacity} Mbps","cyan"),("Traffic",f"{traffic:.1f} Mbps","amber"),("Available",f"{max(0,sim.capacity-traffic):.1f} Mbps","green"),("Utilization",f"{util:.1f}%","violet"),("Dropped",sim.stats["dropped"],"red")]),graph("ethernet-graph",["throughput","utilization"],"Bandwidth and Utilization")])
+def tsn():
+ p,n,ms=engine.tsn.active();return html.Div([html.H2("TSN IEEE 802.1Qbv Simulation"),html.Div(f"Active: {n} · {ms:.2f} ms",className="strip"),html.Div([html.Div("0–1 ms\nSAFETY",className="slot safety"),html.Div("1–3 ms\nCONTROL",className="slot control"),html.Div("3–6 ms\nADAS",className="slot adas"),html.Div("6–10 ms\nNORMAL",className="slot normal")],className="timeline"),kpis([(f"Priority {q} {title}",sum(x.priority==q for x in sim.packets),"cyan" if q==p else "muted") for q,(_,_,title) in engine.tsn.windows.items()])])
+def performance():
+ m=summarize(list(sim.history));loss=100*sim.stats["dropped"]/max(1,sim.stats["converted"]);return html.Div([html.H2("Network Performance"),kpis([("Latency",f"{sim.last_latency:.3f} ms","red" if sim.last_latency>1 else "green"),("Average",f'{m["avg_latency"]:.3f} ms',"cyan"),("Jitter",f'{m["avg_jitter"]:.3f} ms',"amber"),("Throughput",f'{m["avg_throughput"]:.1f} Mbps',"violet"),("Loss",f"{loss:.2f}%","red")]),html.Div([graph("latency-graph",["latency","jitter"],"Latency and Jitter"),graph("throughput-graph",["throughput","packet_loss","utilization"],"Throughput, Loss, Utilization")],className="two")])
+def security(): return html.Div([html.H2("Security Center"),kpis([("Status","ATTACK DETECTED" if sim.security_events else "SECURE","red" if sim.security_events else "green"),("Authenticated",sim.stats["converted"],"green"),("Rejected",sim.stats["rejected"],"red"),("Attacks",sim.stats["attacks"],"amber"),("Blocked",sim.stats["blocked"],"green")]),html.Div([html.Button("REPLAY ATTACK",id="replay"),html.Button("UNAUTHORIZED",id="unauthorized"),html.Button("MODIFIED PACKET",id="modified"),html.Button("CLEAR ALERTS",id="clear-alerts")],className="actions"),html.Pre("\n".join(f'[{e["time"][11:19]}] {e["type"]}: {e["reason"]}' for e in sim.security_events) or "No alerts",className="terminal")])
+def charging():
+ c=sim.charger;return html.Div([html.H2("EV Charging Station"),html.Div([html.Button("CONNECT EV",id="connect"),html.Button("AUTHORIZE",id="authorize"),html.Button("START CHARGING",id="charge"),html.Button("STOP CHARGING",id="stop-charge"),html.Button("DISCONNECT",id="disconnect")],className="actions"),kpis([("Charger",c.status,"green" if c.status=="Charging" else "cyan"),("Connector",c.connector,"cyan"),("Authorization","ACCEPTED" if c.authorized else "REQUIRED","green" if c.authorized else "amber"),("SOC",f'{sim.vehicle.get("soc",78):.2f}%',"green"),("Voltage",f"{c.voltage:.1f} V","cyan"),("Current",f"{c.current:.1f} A","amber"),("Power",f"{c.power_kw:.2f} kW","violet"),("Energy",f"{c.energy_kwh:.3f} kWh","green")]),html.Div([graph("soc-graph",["soc"],"Battery SOC"),graph("power-graph",["voltage","current"],"Voltage and Current")],className="two")])
+def ocpp():
+ online=sim.mode!="OCPP Connection Failure Mode";logs="\n".join(f'[{x["time"][11:19]}] {x["direction"]} · {x["type"]} · {x["response"]["status"]}\n{json.dumps(x["payload"],indent=2)}' for x in list(sim.ocpp_messages)[:20]);return html.Div([html.H2("OCPP 2.0.1 & CSMS"),kpis([("WebSocket","CONNECTED" if online else "OFFLINE","green" if online else "red"),("Station","KS5692-CS-01","cyan"),("CSMS","ONLINE" if online else "OFFLINE","green" if online else "red"),("Transaction",sim.charger.transaction_id or "—","violet"),("Messages",sim.stats["ocpp"],"cyan"),("Offline Queue",len(sim.unsent_ocpp),"amber")]),html.Button("SYNCHRONIZE QUEUE",id="sync",disabled=not online or not sim.unsent_ocpp),html.Pre(logs or "Waiting for OCPP messages",className="terminal tall")])
+def logs():
+ text="\n".join(f'[{x["time"]}] [{x["category"]}] {x["message"]}' for x in sim.logs);return html.Div([html.H2("Unified Communication Terminal"),html.Div([html.Button("CLEAR LOGS",id="clear-logs"),html.A("DOWNLOAD TXT",href="data:text/plain;charset=utf-8,"+text.replace("\n","%0A"),download="ks5692_logs.txt",className="download")],className="actions"),html.Pre(text or "No logs",className="terminal tall")])
+def comparison_figure():
+ df=pd.DataFrame({"Metric":["Bandwidth Mbps","Throughput Mbps","Critical Delivery %"],"CAN":[1,.7,91],"Proposed":[1000,850,99.8]})
+ f=px.bar(df,x="Metric",y=["CAN","Proposed"],barmode="group",template="plotly_dark",color_discrete_sequence=["#657188","#6c7cff"])
+ f.update_layout(height=380,autosize=True,paper_bgcolor="#141a28",plot_bgcolor="#101622",font_color="#aeb9cb",margin=dict(l=35,r=15,t=45,b=40),uirevision="comparison")
+ f.update_xaxes(gridcolor="#293247",automargin=True);f.update_yaxes(gridcolor="#293247",automargin=True)
+ return f
+def comparison():
+ rows=[{"Parameter":a,"Conventional CAN":b,"Proposed":c} for a,b,c in [("Bandwidth","Low","High"),("ADAS Support","Limited","Supported"),("Real-Time Scheduling","Limited","TSN"),("Encryption","Limited","Security Layer"),("Cloud Connectivity","Limited","OCPP"),("EV Charging","No","Yes")]];return html.Div([html.H2("Performance Comparison"),html.Div("SIMULATED COMPARISON DATA — not measured physical-network results.",className="warning"),table(rows),dcc.Graph(id="compare-graph",figure=comparison_figure(),config={"displayModeBar":False,"responsive":True},responsive=True,className="chart")])
+def report():
+ df=pd.DataFrame(list(sim.history));data={"simulation":{"run_id":sim.run_id,"mode":sim.mode,"capacity":sim.capacity,"ticks":sim.tick_count},"vehicle":{"soc":sim.vehicle.get("soc"),"speed":sim.vehicle.get("speed"),"max_speed":float(df.speed.max()) if not df.empty else 0},"network":{**summarize(list(sim.history)),**sim.stats},"charging":{"transaction":sim.charger.transaction_id,"energy_kwh":sim.charger.energy_kwh},"ocpp":{"messages":sim.stats["ocpp"],"queued":len(sim.unsent_ocpp)}};text=json.dumps(data,indent=2);return html.Div([html.H2("Simulation Report"),html.A("DOWNLOAD JSON",href="data:application/json;charset=utf-8,"+text.replace("\n","%0A"),download="ks5692_report.json",className="download"),html.Pre(text,className="terminal tall")])
+RENDER={"Overview":overview,"Live Vehicle":vehicle,"CAN XL":can,"Gateway":gateway,"Ethernet":ethernet,"TSN":tsn,"Performance":performance,"Security":security,"EV Charging":charging,"OCPP & CSMS":ocpp,"Logs":logs,"Comparison":comparison,"Reports":report}
+
+@app.callback(Output("content","children"),Output("status","children"),Input("clock","n_intervals"),Input("page","value"))
+def render(tick,page):
+ with lock:
+  status="PAUSED" if sim.paused else "RUNNING" if sim.running else "OFFLINE"
+  graph_pages={"Live Vehicle","Ethernet","Performance","EV Charging","Comparison"}
+  if ctx.triggered_id=="clock" and page in graph_pages:
+   return no_update,status
+  return RENDER[page](),status
+@app.callback(Output("events","data"),Input("start","n_clicks"),Input("pause","n_clicks"),Input("resume","n_clicks"),Input("stop","n_clicks"),Input("reset","n_clicks"),Input("mode","value"),Input("capacity","value"),Input("speed","value"),prevent_initial_call=True)
+def controls(*v):
+ with lock:
+  t=ctx.triggered_id
+  if t=="start" and not sim.running:sim.start();engine.db.execute("INSERT OR REPLACE INTO simulation_runs VALUES(?,?,?,?,?)",(sim.run_id,time.strftime("%Y-%m-%dT%H:%M:%S"),None,sim.mode,sim.capacity));engine.boot(sim);sim.log("SYSTEM","Started")
+  elif t=="pause" and sim.running:sim.paused=True;sim.log("SYSTEM","Paused")
+  elif t=="resume" and sim.running:sim.paused=False;sim.log("SYSTEM","Resumed")
+  elif t=="stop" and sim.running:sim.stop();sim.log("SYSTEM","Stopped")
+  elif t=="reset":sim.reset()
+  elif t=="mode":sim.mode=v[5]
+  elif t=="capacity":sim.capacity=int(v[6])
+  elif t=="speed":sim.speed_factor=float(v[7])
+ return {"event":t,"time":time.time()}
+@app.callback(Output("events","clear_data",allow_duplicate=True),Input("replay","n_clicks"),Input("unauthorized","n_clicks"),Input("modified","n_clicks"),Input("clear-alerts","n_clicks"),prevent_initial_call=True)
+def attacks(*_):
+ with lock:
+  kinds={"replay":"Replay","unauthorized":"Unauthorized","modified":"Modified"}
+  if ctx.triggered_id in kinds:engine.inject(sim,kinds[ctx.triggered_id])
+  else:sim.security_events.clear()
+ return False
+@app.callback(Output("events","modified_timestamp",allow_duplicate=True),Input("connect","n_clicks"),Input("authorize","n_clicks"),Input("charge","n_clicks"),Input("stop-charge","n_clicks"),Input("disconnect","n_clicks"),Input("sync","n_clicks"),prevent_initial_call=True)
+def charge_actions(*_):
+ with lock:
+  t=ctx.triggered_id;c=sim.charger
+  if t=="connect":c.connect();engine.ocpp_send(sim,"StatusNotification",{"status":"Occupied"})
+  elif t=="authorize" and c.authorize():engine.ocpp_send(sim,"Authorize",{"idToken":"DEMO-RFID-001"})
+  elif t=="charge" and c.start():engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Started","transactionId":c.transaction_id})
+  elif t=="stop-charge" and c.stop():engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Ended","transactionId":c.transaction_id})
+  elif t=="disconnect":c.disconnect();engine.ocpp_send(sim,"StatusNotification",{"status":"Available"})
+  elif t=="sync":
+   queued=list(sim.unsent_ocpp);sim.unsent_ocpp.clear()
+   for x in queued:engine.ocpp_send(sim,x["type"],x["payload"].get("payload",{}))
+ return int(time.time()*1000)
+@app.callback(Output("events","storage_type",allow_duplicate=True),Input("clear-logs","n_clicks"),prevent_initial_call=True)
+def clear_logs(_):sim.logs.clear();return "memory"
+
+def line(cols,title):
+ with lock:df=pd.DataFrame(list(sim.history)[-120:])
+ if df.empty:return {"data":[],"layout":{"template":"plotly_dark","title":{"text":title,"x":.04},"height":380,"autosize":True,"paper_bgcolor":"#141a28","plot_bgcolor":"#101622","font":{"color":"#aeb9cb"},"margin":{"l":35,"r":15,"t":52,"b":32},"uirevision":"stable","annotations":[{"text":"Start the simulation to populate live data","xref":"paper","yref":"paper","x":.5,"y":.5,"showarrow":False,"font":{"color":"#718098","size":14}}],"xaxis":{"visible":False},"yaxis":{"visible":False}}}
+ f=px.line(df,x="time",y=cols,title=title,template="plotly_dark",color_discrete_sequence=["#6c7cff","#20d6c7","#ffb84d","#bd83ff"]);f.update_traces(mode="lines",line_shape="spline",line_smoothing=.55);f.update_layout(height=380,autosize=True,paper_bgcolor="#141a28",plot_bgcolor="#101622",font_color="#aeb9cb",margin=dict(l=35,r=15,t=52,b=32),legend=dict(orientation="h",y=1.02,x=1,xanchor="right",yanchor="bottom"),uirevision="stable",transition_duration=250,hovermode="x unified");f.update_xaxes(gridcolor="#293247",automargin=True);f.update_yaxes(gridcolor="#293247",automargin=True);return f
+@app.callback(Output("vehicle-a","figure"),Output("vehicle-b","figure"),Input("clock","n_intervals"))
+def vg(_):return line(["speed","rpm"],"Speed and RPM"),line(["soc","battery_temp","adas"],"SOC, Temperature, ADAS")
+@app.callback(Output("ethernet-graph","figure"),Input("clock","n_intervals"))
+def eg(_):return line(["throughput","utilization"],"Bandwidth and Utilization")
+@app.callback(Output("latency-graph","figure"),Output("throughput-graph","figure"),Input("clock","n_intervals"))
+def pg(_):return line(["latency","jitter"],"Latency and Jitter"),line(["throughput","packet_loss","utilization"],"Throughput, Loss, Utilization")
+@app.callback(Output("soc-graph","figure"),Output("power-graph","figure"),Input("clock","n_intervals"))
+def cg(_):return line(["soc"],"Battery SOC"),line(["voltage","current"],"Voltage and Current")
+@app.callback(Output("compare-graph","figure"),Input("clock","n_intervals"))
+def compare(_):
+ return comparison_figure()
+
+if __name__=="__main__": app.run(debug=False,host="127.0.0.1",port=8050)
