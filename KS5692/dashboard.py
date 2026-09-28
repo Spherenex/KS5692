@@ -1,10 +1,11 @@
 """Dash/Plotly dashboard for the KS5692 automotive network simulation."""
-import json, threading, time
+import base64, json, threading, time
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote
 import pandas as pd
 import plotly.express as px
-from dash import Dash, Input, Output, ctx, dcc, html, dash_table
+from dash import Dash, Input, Output, State, ctx, dcc, html, dash_table
 from main import SimulationEngine
 from metrics import summarize
 from state_manager import SimulationState
@@ -39,7 +40,7 @@ def disable_dashboard_caching(response):
         response.headers["Expires"] = "0"
     return response
 
-PAGES=["Overview","Live Vehicle","CAN XL","Gateway","Ethernet","TSN","Performance","Security","EV Charging","OCPP & CSMS","Logs","Comparison","Reports"]
+PAGES=["Overview","RTL Source","Live Vehicle","CAN XL","Gateway","Ethernet","TSN","Performance","Security","EV Charging","OCPP & CSMS","Logs","Comparison","Reports"]
 MODES=["Normal Mode","High Traffic Mode","Cyberattack Mode","Network Failure Mode","OCPP Connection Failure Mode"]
 VEHICLE_NODES=[("Vehicle ECUs","ECU"),("CAN XL","XL"),("Security","SEC"),("Gateway","GW"),("TSN","QBV"),("Automotive Ethernet","ETH")]
 CLOUD_NODES=[("EV Charger","EVSE"),("OCPP","OCPP"),("CSMS","CLOUD")]
@@ -97,16 +98,16 @@ def lane(tag,chips,duration="22s"):
 def table(tid,columns,rows=()):
  return dash_table.DataTable(id=tid,data=list(rows),columns=[{"name":c,"id":c} for c in columns],page_size=12,style_as_list_view=True,
   style_table={"overflowX":"auto"},
-  style_cell={"backgroundColor":"transparent","color":"#dce7f8","border":"none","borderBottom":"1px solid rgba(122,152,204,.13)",
+  style_cell={"backgroundColor":"transparent","color":"#263343","border":"none","borderBottom":"1px solid #d9dee5",
               "fontFamily":"var(--mono)","fontSize":"12px","textAlign":"left","padding":"11px 14px","maxWidth":"360px",
               "overflow":"hidden","textOverflow":"ellipsis"},
-  style_header={"backgroundColor":"rgba(122,152,220,.08)","color":"#94a8c6","fontWeight":"700","fontSize":"10px",
-                "letterSpacing":"1.1px","textTransform":"uppercase","border":"none","borderBottom":"1px solid rgba(122,152,204,.24)"},
-  style_data_conditional=[{"if":{"row_index":"odd"},"backgroundColor":"rgba(255,255,255,.015)"}])
+  style_header={"backgroundColor":"#eef1f4","color":"#405067","fontWeight":"700","fontSize":"10px",
+                "letterSpacing":"1.1px","textTransform":"uppercase","border":"none","borderBottom":"1px solid #cbd2db"},
+  style_data_conditional=[{"if":{"row_index":"odd"},"backgroundColor":"#f8f9fa"}])
 
 def empty_figure(title):
- return {"data":[],"layout":{"template":"plotly_dark","height":380,"autosize":True,
-  "paper_bgcolor":"rgba(0,0,0,0)","plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#a9b7cc"},
+ return {"data":[],"layout":{"template":"plotly_white","height":380,"autosize":True,
+  "paper_bgcolor":"rgba(0,0,0,0)","plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#42516a"},
   "margin":{"l":35,"r":15,"t":52,"b":32},"uirevision":"stable","title":{"text":title,"x":.04},
   "annotations":[{"text":"Loading live data...","xref":"paper","yref":"paper","x":.5,"y":.5,
                   "showarrow":False,"font":{"color":"#718098","size":13}}],
@@ -122,7 +123,8 @@ def graph(gid,cols,title):
 app.layout=html.Div([
  dcc.Interval(id="clock",interval=1000),
  dcc.Store(id="sink-controls"),dcc.Store(id="sink-attacks"),dcc.Store(id="sink-charge"),dcc.Store(id="sink-sync"),
- dcc.Store(id="sink-logs"),
+ dcc.Store(id="sink-logs"),dcc.Store(id="sink-open"),
+ dcc.Download(id="project-download"),dcc.Download(id="export-download"),
  html.Div([html.Span(className="glow a"),html.Span(className="glow b")],className="backdrop"),
  html.Aside([
   html.Div([html.Div("KS",className="logo"),html.Div([html.B("KS5692"),html.Small("NETWORK LAB")])],className="brand"),
@@ -151,6 +153,55 @@ app.layout=html.Div([
   html.Div(id="content"),
  ],className="main"),
 ],className="shell")
+
+# Desktop-style Verilog studio shell. The legacy layout above is intentionally
+# kept as a compact reference while this mounted layout reuses all callback IDs.
+app.layout=html.Div([
+ dcc.Interval(id="clock",interval=1000),
+ dcc.Store(id="sink-controls"),dcc.Store(id="sink-attacks"),dcc.Store(id="sink-charge"),dcc.Store(id="sink-sync"),
+ dcc.Store(id="sink-logs"),
+ html.Div([html.Span("▣",className="title-icon"),html.Span("KS5692_Automotive_Project — Verilog Simulation Studio"),
+           html.Div([html.Span("—"),html.Span("□"),html.Span("×")],className="window-actions")],className="studio-titlebar"),
+ html.Div([html.Span(x) for x in ["File","Edit","View","Project","Simulation","Analysis","Tools","Reports","Window","Help"]],className="studio-menubar"),
+ html.Div([
+  html.Div([html.Button("□  New",id="new-project",className="tool neutral"),
+            dcc.Upload(id="open-project",children=html.Button("▰  Open",className="tool neutral"),multiple=False),
+            html.Button("▣  Save",id="save-project",className="tool neutral"),html.I(),html.Button("✓  Validate",id="validate-rtl",className="tool validate"),
+            html.Button("▶  Run",id="start",className="tool run"),html.Button("▶▌ Step",id="step",className="tool"),
+            html.Button("▶  Resume",id="resume",disabled=True,className="tool"),
+            html.Button("Ⅱ  Pause",id="pause",disabled=True,className="tool"),html.Button("■  Stop",id="stop",disabled=True,className="tool"),
+            html.Button("↻  Reset",id="reset",className="tool"),html.I(),html.Button("▣  Export",id="export-run",className="tool neutral"),
+            html.Button("▤  Report",id="show-report",className="tool neutral")],className="tool-buttons"),
+  html.Div([html.Label("Mode"),dcc.Dropdown(MODES,"Normal Mode",id="mode",clearable=False),
+            html.Label("Link"),dcc.Dropdown([{"label":"100 Mbps","value":100},{"label":"1 Gbps","value":1000}],1000,id="capacity",clearable=False),
+            html.Label("Speed"),dcc.Dropdown([{"label":f"{x:g}×","value":x} for x in [.5,1,2,5]],1,id="speed",clearable=False)],className="tool-config")
+ ],className="studio-toolbar"),
+ html.Div([
+  html.Div([
+   html.Section([html.H3("FLOW NAVIGATOR"),html.Div([
+    html.Details([html.Summary("PROJECT MANAGER"),html.P("KS5692 Automotive RTL")],open=True),
+    html.Details([html.Summary("AUTOMOTIVE DESIGN"),html.P("ECUs · CAN XL · Gateway")]),
+    html.Details([html.Summary("SIMULATION"),html.P("Compile · Elaborate · Run")]),
+    html.Details([html.Summary("ANALYSIS"),html.P("Latency · Throughput · TSN")]),
+    html.Details([html.Summary("SECURITY"),html.P("Replay · Integrity · Access")]),
+    html.Details([html.Summary("REPORTS"),html.P("Run summary · JSON export")])],className="tree")],className="dock flow-dock"),
+   html.Section([html.H3("SOURCES"),html.Div([html.B("Name",className="source-head"),
+    html.Details([html.Summary("Design Sources"),html.Details([html.Summary("KS5692_Automotive"),
+      html.Span("automotive_sim.sv"),html.Span("canxl_controller.sv"),html.Span("secure_gateway.sv"),
+      html.Span("tsn_scheduler.sv"),html.Span("ethernet_link.sv"),html.Span("charging_controller.sv")],open=True)],open=True),
+    html.Details([html.Summary("Simulation Sources"),html.Details([html.Summary("automotive_tb"),
+      html.Span("automotive_tb.sv"),html.Span("network_failure_test"),html.Span("cyberattack_test")],open=True)],open=True)
+   ],className="source-tree")],className="dock source-dock")
+  ],className="studio-left"),
+  html.Main([dcc.RadioItems(PAGES,"Overview",id="page",className="studio-tabs",labelClassName="studio-tab"),
+             html.Div(id="content",className="workspace-content"),
+             html.Section([html.H3("Console / Messages / Errors"),html.Div([html.B("Console"),html.Span("Messages"),html.Span("Warnings"),html.Span("Errors"),html.Span("Virtual UART")],className="console-tabs"),
+                           html.Pre("[INFO] Verilog Simulation Studio initialized.",id="studio-console")],className="console-dock")],className="studio-main")
+ ],className="studio-body"),
+ html.Div([html.Span("Ready — SystemVerilog automotive network simulation"),
+           html.Div([html.Div([html.Span(className="dot"),html.Span("OFFLINE",id="status-text")],id="status",className="status offline"),
+                     html.Span(["Run: ",html.B("—",id="meta-run")]),html.Span(["Ticks: ",html.B("0",id="meta-tick")])],className="status-right")],className="studio-statusbar")
+],className="studio-shell")
 
 # ---------------------------------------------------------------- page state
 # Each page has one state function feeding both the initial render and the
@@ -204,20 +255,26 @@ def eth_state():
          "cards":[("Link",state,"red" if failed else "green" if state!="OFFLINE" else "muted"),
                   ("Capacity",f"{sim.capacity} Mbps","cyan"),("Traffic",f"{traffic:.1f} Mbps","amber"),
                   ("Available",f"{max(0,sim.capacity-traffic):.1f} Mbps","green"),
-                  ("Utilisation",f"{util:.1f}%","violet"),("Dropped",f'{sim.stats["dropped"]:,}',"red")]}
+                  ("Utilisation",f"{util:.1f}%","violet"),("Dropped",f'{sim.stats["dropped"]:,}',"red"),
+                  ("Last recovery",f"{sim.last_recovery_ms:.0f} ms" if sim.last_recovery_ms else "—","amber")]}
 
 def tsn_state():
- priority,name,ms=engine.tsn.active()
- return {"active":f"Active window: {name} · priority {priority} · {ms:.2f} ms into the 10 ms cycle",
+    priority,name,ms=engine.tsn.active()
+    metrics=summarize(list(sim.history))
+    return {"active":f"Active window: {name} · priority {priority} · {ms:.2f} ms into the 10 ms cycle",
          "cards":[(f"Priority {q} · {title}",sum(x.priority==q for x in sim.packets),"cyan" if q==priority else "muted")
-                  for q,(_,_,title) in engine.tsn.windows.items()]}
+                  for q,(_,_,title) in engine.tsn.windows.items()]+[("Average gate wait",f'{metrics["avg_queue_wait"]:.3f} ms',"amber")]}
 
 def perf_state():
- m=summarize(list(sim.history)); loss=100*sim.stats["dropped"]/max(1,sim.stats["converted"])
- return {"cards":[("Latency",f"{sim.last_latency:.3f} ms","red" if sim.last_latency>1 else "green"),
-                  ("Average latency",f'{m["avg_latency"]:.3f} ms',"cyan"),("Jitter",f'{m["avg_jitter"]:.3f} ms',"amber"),
+    m=summarize(list(sim.history)); loss=100*sim.stats["dropped"]/max(1,sim.stats["converted"])
+    return {"cards":[("Latency",f"{sim.last_latency:.3f} ms","red" if sim.last_latency>1 else "green"),
+                  ("Average latency",f'{m["avg_latency"]:.3f} ms',"cyan"),("Minimum latency",f'{m["min_latency"]:.3f} ms',"green"),
+                  ("Maximum latency",f'{m["max_latency"]:.3f} ms',"red" if m["max_latency"]>1 else "cyan"),
+                  ("Current jitter",f'{sim.last_jitter:.3f} ms',"amber"),("Maximum jitter",f'{m["max_jitter"]:.3f} ms',"amber"),
                   ("Throughput",f'{m["avg_throughput"]:.1f} Mbps',"violet"),
-                  ("Utilisation",f'{m["avg_utilization"]:.1f}%',"cyan"),("Loss",f"{loss:.2f}%","red")]}
+                  ("Utilisation",f'{m["avg_utilization"]:.1f}%',"cyan"),("Loss",f"{loss:.2f}%","red")],
+            "warning":"NETWORK LATENCY WARNING — critical 1 ms target exceeded" if sim.latency_warning else "Latency is within the 1 ms critical-traffic target",
+            "warning_class":"warning" if sim.latency_warning else "strip mono"}
 
 def sec_state():
  breached=bool(sim.security_events)
@@ -225,7 +282,11 @@ def sec_state():
          "log":"\n".join(f'[{e["time"][11:19]}] {e["type"]}: {e["reason"]}' for e in sim.security_events) or "No alerts",
          "cards":[("Status","ATTACK DETECTED" if breached else "SECURE","red" if breached else "green"),
                   ("Authenticated",f'{sim.stats["converted"]:,}',"green"),("Rejected",f'{sim.stats["rejected"]:,}',"red"),
-                  ("Attacks",sim.stats["attacks"],"amber"),("Blocked",sim.stats["blocked"],"green")]}
+                  ("Replay",sum(e["type"]=="Replay" for e in sim.security_events),"amber"),
+                  ("Unauthorized",sum(e["type"]=="Unauthorized" for e in sim.security_events),"amber"),
+                  ("Modified",sum(e["type"]=="Modified" for e in sim.security_events),"amber"),
+                  ("Attacks",sim.stats["attacks"],"amber"),("Blocked",sim.stats["blocked"],"green")],
+         "encryption":"AES-256-GCM Ethernet protection active"}
 
 def ev_state():
  c=sim.charger; soc=sim.vehicle.get("soc",78)
@@ -235,10 +296,10 @@ def ev_state():
                   ("Authorization","ACCEPTED" if c.authorized else "REQUIRED","green" if c.authorized else "amber"),
                   ("SOC",f"{soc:.2f}%","green"),("Voltage",f"{c.voltage:.1f} V","cyan"),
                   ("Current",f"{c.current:.1f} A","amber"),("Power",f"{c.power_kw:.2f} kW","violet"),
-                  ("Energy",f"{c.energy_kwh:.3f} kWh","green")]}
+                  ("Energy",f"{c.energy_kwh:.3f} kWh","green"),("Duration",f"{c.duration_seconds:.1f} s","cyan")]}
 
 def ocpp_state():
- online=sim.mode!="OCPP Connection Failure Mode"
+ online=sim.mode!="OCPP Connection Failure Mode" and engine.ocpp.connected and engine.csms.running
  return {"ws":f"ws {motion() if online else 'down'}","sync_disabled":(not online) or (not sim.unsent_ocpp),
          "log":"\n".join(f'[{x["time"][11:19]}] {x["direction"]} · {x["type"]} · {x["response"]["status"]}\n'
                          f'{json.dumps(x["payload"],indent=2)}' for x in list(sim.ocpp_messages)[:20]) or "Waiting for OCPP messages",
@@ -255,8 +316,10 @@ def snapshot():
          "vehicle":{"soc":sim.vehicle.get("soc"),"speed":sim.vehicle.get("speed"),
                     "max_speed":float(df.speed.max()) if not df.empty else 0},
          "network":{**summarize(list(sim.history)),**sim.stats},
-         "charging":{"transaction":sim.charger.transaction_id,"energy_kwh":sim.charger.energy_kwh},
-         "ocpp":{"messages":sim.stats["ocpp"],"queued":len(sim.unsent_ocpp)}}
+         "charging":{"transaction":sim.charger.transaction_id,"energy_kwh":sim.charger.energy_kwh,"duration_seconds":sim.charger.duration_seconds},
+         "security":{"ethernet":"AES-256-GCM","attacks":sim.stats["attacks"],"blocked":sim.stats["blocked"]},
+         "recovery":{"last_network_recovery_ms":sim.last_recovery_ms},
+         "ocpp":{"transport":"WebSocket","connected":engine.ocpp.connected,"messages":sim.stats["ocpp"],"queued":len(sim.unsent_ocpp)}}
 
 # -------------------------------------------------------------------- pages
 def page_overview():
@@ -272,6 +335,15 @@ def page_overview():
                        "charging/OCPP → attacks → high traffic/failures → report.")],
                open=True,className="panel"),
  ],className="page")
+
+def page_rtl_source():
+ source=(Path(__file__).resolve().parent/"rtl"/"automotive_sim.sv").read_text(encoding="utf-8")
+ numbered="\n".join(f"{number:4}  {line}" for number,line in enumerate(source.splitlines(),1))
+ return html.Div([
+  html.Div([html.B("AUTOMOTIVE NETWORK RTL / Algorithm Code"),
+            html.Span("automotive_sim.sv",className="editor-file")],className="editor-title"),
+  html.Pre(numbered,className="rtl-editor"),
+ ],className="page source-page")
 
 def page_vehicle():
  st=veh_state()
@@ -337,9 +409,11 @@ def page_tsn():
  ],className="page")
 
 def page_performance():
+ st=perf_state()
  return html.Div([
   head("Quality","Network Performance","Latency, jitter, throughput and loss measured across the simulated path."),
-  kpi_grid(perf_state()["cards"],cid="perf-kpis"),
+  html.Div(st["warning"],id="perf-warning",className=st["warning_class"]),
+  kpi_grid(st["cards"],cid="perf-kpis"),
   html.Div([graph("latency-graph",["latency","jitter"],"Latency and Jitter"),
             graph("throughput-graph",["throughput","packet_loss","utilization"],"Throughput, Loss, Utilisation")],className="two"),
  ],className="page")
@@ -354,6 +428,7 @@ def page_security():
             id="sec-radar",className=st["radar"]),
    kpi_grid(st["cards"],cid="sec-kpis"),
   ],className="defence"),
+  html.Div(st["encryption"],className="strip mono"),
   html.Div([html.Button("REPLAY ATTACK",id="replay"),html.Button("UNAUTHORIZED",id="unauthorized"),
             html.Button("MODIFIED PACKET",id="modified"),html.Button("CLEAR ALERTS",id="clear-alerts",className="ghost")],
            className="actions"),
@@ -381,7 +456,7 @@ def page_charging():
 def page_ocpp():
  st=ocpp_state()
  return html.Div([
-  head("Cloud","OCPP 2.0.1 & CSMS","Structured station-to-CSMS messages, with local queueing while the link is down."),
+  head("Cloud","OCPP 2.0.1 & CSMS","OCPP CALL/CALLRESULT frames over a real localhost WebSocket, with offline queueing and recovery."),
   html.Div([
    html.Div([html.B("KS5692-CS-01"),html.Small("Charging station")],className="endpoint"),
    html.Div(dots(3,.75),className="link wide"),
@@ -408,8 +483,8 @@ def comparison_figure():
  return {"data":[
   {"type":"bar","name":"CAN","x":metrics,"y":[1,.7,91],"marker":{"color":"#5a6884"}},
   {"type":"bar","name":"Proposed","x":metrics,"y":[1000,850,99.8],"marker":{"color":"#6d7cff"}}],
-  "layout":{"template":"plotly_dark","height":380,"autosize":True,"barmode":"group","bargap":.35,
-   "paper_bgcolor":"rgba(0,0,0,0)","plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#a9b7cc"},
+  "layout":{"template":"plotly_white","height":380,"autosize":True,"barmode":"group","bargap":.35,
+   "paper_bgcolor":"rgba(0,0,0,0)","plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#42516a"},
    "margin":{"l":35,"r":15,"t":45,"b":40},"uirevision":"comparison",
    "legend":{"orientation":"h","y":1.02,"x":1,"xanchor":"right","yanchor":"bottom"},
    "xaxis":{"gridcolor":"rgba(140,165,205,.10)","zeroline":False,"automargin":True},
@@ -436,7 +511,7 @@ def page_report():
   html.Pre(text,id="rep-out",className="terminal tall"),
  ],className="page")
 
-RENDER={"Overview":page_overview,"Live Vehicle":page_vehicle,"CAN XL":page_can,"Gateway":page_gateway,"Ethernet":page_ethernet,
+RENDER={"Overview":page_overview,"RTL Source":page_rtl_source,"Live Vehicle":page_vehicle,"CAN XL":page_can,"Gateway":page_gateway,"Ethernet":page_ethernet,
         "TSN":page_tsn,"Performance":page_performance,"Security":page_security,"EV Charging":page_charging,
         "OCPP & CSMS":page_ocpp,"Logs":page_logs,"Comparison":page_comparison,"Reports":page_report}
 
@@ -457,6 +532,14 @@ def header_tick(_):
   state="paused" if paused else "live" if running else "offline"
   return (f"status {state}",state.upper(),sim.run_id,f"{sim.tick_count:,}",
           running,(not running) or paused,(not running) or (not paused),not running)
+
+@app.callback(Output("studio-console","children"),Input("clock","n_intervals"))
+def studio_console_tick(_):
+ with lock:
+  backend=engine.verilog.backend_name
+  lines=[f"[INFO] Backend: {backend}",f"[INFO] Run {sim.run_id} | mode={sim.mode} | tick={sim.tick_count}"]
+  lines.extend(f"{entry['time']} [{entry['category']}] {entry['message']}" for entry in reversed(list(sim.logs)[:8]))
+ return "\n".join(lines)
 
 # ------------------------------------------------------------- per-page ticks
 @app.callback(*[Output(f"node-{i}","className") for i in range(len(NODES))],
@@ -500,10 +583,10 @@ def tsn_tick(_):
  with lock: st=tsn_state()
  return [kpi(*x) for x in st["cards"]],st["active"]
 
-@app.callback(Output("perf-kpis","children"),Input("clock","n_intervals"))
+@app.callback(Output("perf-kpis","children"),Output("perf-warning","children"),Output("perf-warning","className"),Input("clock","n_intervals"))
 def performance_tick(_):
  with lock: st=perf_state()
- return [kpi(*x) for x in st["cards"]]
+ return [kpi(*x) for x in st["cards"]],st["warning"],st["warning_class"]
 
 @app.callback(Output("sec-kpis","children"),Output("sec-radar","className"),Output("sec-verdict","children"),
               Output("sec-log","children"),Input("clock","n_intervals"))
@@ -536,7 +619,8 @@ def report_tick(_):
 # ------------------------------------------------------------------ controls
 @app.callback(Output("sink-controls","data"),Input("start","n_clicks"),Input("pause","n_clicks"),Input("resume","n_clicks"),
               Input("stop","n_clicks"),Input("reset","n_clicks"),Input("mode","value"),Input("capacity","value"),
-              Input("speed","value"),prevent_initial_call=True)
+              Input("speed","value"),Input("new-project","n_clicks"),Input("step","n_clicks"),
+              Input("validate-rtl","n_clicks"),prevent_initial_call=True)
 def controls(*v):
  with lock:
   t=ctx.triggered_id
@@ -547,12 +631,93 @@ def controls(*v):
    engine.boot(sim); sim.log("SYSTEM","Started")
   elif t=="pause" and sim.running: sim.paused=True; sim.log("SYSTEM","Paused")
   elif t=="resume" and sim.running: sim.paused=False; sim.log("SYSTEM","Resumed")
-  elif t=="stop" and sim.running: sim.stop(); sim.log("SYSTEM","Stopped")
-  elif t=="reset": sim.reset()
-  elif t=="mode": sim.mode=v[5]
+  elif t=="stop" and sim.running:
+   engine.db.execute("UPDATE simulation_runs SET end_time=? WHERE run_id=?",(time.strftime("%Y-%m-%dT%H:%M:%S"),sim.run_id))
+   engine.ocpp.disconnect(); sim.stop(); sim.log("SYSTEM","Stopped")
+  elif t=="reset": engine.ocpp.disconnect(); sim.reset()
+  elif t=="new-project":
+   engine.ocpp.disconnect(); sim.reset(); sim.log("SYSTEM","New Verilog simulation project created")
+  elif t=="validate-rtl":
+   try:
+    valid=engine.verilog.prepare(force=True)
+    sim.log("VERILOG","Validation passed: RTL compiled and elaborated" if valid else f"Validation failed: {engine.verilog.last_error}")
+   except Exception as exc: sim.log("VERILOG",f"Validation failed: {exc}")
+  elif t=="step":
+   if not sim.running:
+    sim.start()
+    engine.db.execute("INSERT OR REPLACE INTO simulation_runs VALUES(?,?,?,?,?)",
+                      (sim.run_id,time.strftime("%Y-%m-%dT%H:%M:%S"),None,sim.mode,sim.capacity))
+   sim.paused=False
+   engine.tick(sim)
+   sim.paused=True
+   sim.log("VERILOG",f"Single step completed at tick {sim.tick_count}")
+  elif t=="mode":
+   previous=sim.mode; sim.mode=v[5]
+   if sim.mode=="OCPP Connection Failure Mode":
+    engine.ocpp.disconnect(); sim.modules["OCPP"]="OFFLINE"; sim.modules["CSMS"]="OFFLINE"; sim.log("OCPP","WebSocket link disconnected")
+   elif previous=="OCPP Connection Failure Mode" and sim.running:
+    engine.ocpp_send(sim,"StatusNotification",{"timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"connectorStatus":"Available","evseId":1,"connectorId":1})
   elif t=="capacity": sim.capacity=int(v[6])
   elif t=="speed": sim.speed_factor=float(v[7])
  return {"event":t,"time":time.time()}
+
+def project_payload():
+ return {
+  "format":"KS5692-Verilog-Project","version":1,
+  "configuration":{"mode":sim.mode,"capacity":sim.capacity,"speed_factor":sim.speed_factor},
+  "rtl":{
+   "automotive_sim.sv":(Path(__file__).resolve().parent/"rtl"/"automotive_sim.sv").read_text(encoding="utf-8"),
+   "automotive_tb.sv":(Path(__file__).resolve().parent/"rtl"/"automotive_tb.sv").read_text(encoding="utf-8"),
+  }
+ }
+
+@app.callback(Output("project-download","data"),Input("save-project","n_clicks"),prevent_initial_call=True)
+def save_project(_):
+ with lock:
+  data=json.dumps(project_payload(),indent=2)
+  sim.log("PROJECT","Project saved")
+ return {"content":data,"filename":"KS5692_Automotive_Project.json","type":"application/json"}
+
+@app.callback(Output("export-download","data"),Input("export-run","n_clicks"),prevent_initial_call=True)
+def export_run(_):
+ with lock:
+  data=json.dumps(snapshot(),indent=2)
+  sim.log("REPORT","Simulation snapshot exported")
+ return {"content":data,"filename":f"{sim.run_id}_report.json","type":"application/json"}
+
+@app.callback(Output("page","value"),Input("show-report","n_clicks"),prevent_initial_call=True)
+def show_report(_):
+ return "Reports"
+
+@app.callback(Output("mode","value"),Output("capacity","value"),Output("speed","value"),Output("sink-open","data"),
+              Input("new-project","n_clicks"),Input("open-project","contents"),
+              State("open-project","filename"),State("mode","value"),State("capacity","value"),State("speed","value"),
+              prevent_initial_call=True)
+def project_file_actions(_,contents,filename,current_mode,current_capacity,current_speed):
+ if ctx.triggered_id=="new-project":
+  return "Normal Mode",1000,1,{"event":"new","time":time.time()}
+ if not contents:
+  return current_mode,current_capacity,current_speed,{"event":"cancelled","time":time.time()}
+ try:
+  encoded=contents.split(",",1)[1]
+  project=json.loads(base64.b64decode(encoded).decode("utf-8"))
+  if project.get("format")!="KS5692-Verilog-Project": raise ValueError("unsupported project format")
+  config=project.get("configuration",{})
+  mode=config.get("mode","Normal Mode"); capacity=int(config.get("capacity",1000)); speed=float(config.get("speed_factor",1))
+  if mode not in MODES or capacity not in {100,1000} or speed not in {.5,1,2,5}: raise ValueError("invalid project configuration")
+  rtl=project.get("rtl",{})
+  rtl_dir=Path(__file__).resolve().parent/"rtl"
+  with lock:
+   for name in ("automotive_sim.sv","automotive_tb.sv"):
+    if name in rtl:
+     if not isinstance(rtl[name],str): raise ValueError(f"invalid {name}")
+     (rtl_dir/name).write_text(rtl[name],encoding="utf-8")
+   engine.verilog.prepare(force=True)
+   sim.log("PROJECT",f"Opened {filename or 'Verilog project'}")
+  return mode,capacity,speed,{"event":"open","filename":filename,"time":time.time()}
+ except Exception as exc:
+  with lock: sim.log("PROJECT",f"Open failed: {exc}")
+  return current_mode,current_capacity,current_speed,{"event":"error","message":str(exc),"time":time.time()}
 
 @app.callback(Output("sink-attacks","data"),Input("replay","n_clicks"),Input("unauthorized","n_clicks"),
               Input("modified","n_clicks"),Input("clear-alerts","n_clicks"),prevent_initial_call=True)
@@ -572,18 +737,27 @@ def attacks(*_):
 def charge_actions(*_):
  with lock:
   t=ctx.triggered_id; c=sim.charger
-  if t=="connect": c.connect(); engine.ocpp_send(sim,"StatusNotification",{"status":"Occupied"})
-  elif t=="authorize" and c.authorize(): engine.ocpp_send(sim,"Authorize",{"idToken":"DEMO-RFID-001"})
-  elif t=="charge" and c.start(): engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Started","transactionId":c.transaction_id})
-  elif t=="stop-charge" and c.stop(): engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Ended","transactionId":c.transaction_id})
-  elif t=="disconnect": c.disconnect(); engine.ocpp_send(sim,"StatusNotification",{"status":"Available"})
+  if t=="connect":
+   c.connect(); engine.ocpp_send(sim,"StatusNotification",{"timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"connectorStatus":"Occupied","evseId":1,"connectorId":1})
+  elif t=="authorize" and c.authorize():
+   result=engine.ocpp_send(sim,"Authorize",{"idToken":{"idToken":"DEMO-RFID-001","type":"ISO14443"}})
+   if result["response"].get("status") not in {"Accepted","QUEUED"}: c.authorized=False; c.status="Preparing"
+  elif t=="charge" and c.start(sim.vehicle.get("soc")):
+   engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Started","timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"triggerReason":"Authorized","seqNo":0,"transactionInfo":{"transactionId":c.transaction_id}})
+   engine.ocpp_send(sim,"StatusNotification",{"timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"connectorStatus":"Occupied","chargingState":"Charging","evseId":1,"connectorId":1})
+  elif t=="stop-charge" and c.stop(sim.vehicle.get("soc")):
+   engine.record_charging_session(sim)
+   engine.ocpp_send(sim,"TransactionEvent",{"eventType":"Ended","timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"triggerReason":"EVDeparted","seqNo":1,"transactionInfo":{"transactionId":c.transaction_id},"meterValue":{"energyKWh":c.energy_kwh,"durationSeconds":c.duration_seconds}})
+   engine.ocpp_send(sim,"StatusNotification",{"timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"connectorStatus":"Occupied","chargingState":"Idle","evseId":1,"connectorId":1})
+  elif t=="disconnect":
+   if c.status=="Charging" and c.stop(sim.vehicle.get("soc")): engine.record_charging_session(sim)
+   c.disconnect(); engine.ocpp_send(sim,"StatusNotification",{"timestamp":time.strftime("%Y-%m-%dT%H:%M:%SZ"),"connectorStatus":"Available","evseId":1,"connectorId":1})
  return time.time()
 
 @app.callback(Output("sink-sync","data"),Input("sync","n_clicks"),prevent_initial_call=True)
 def sync_queue(_):
  with lock:
-  queued=list(sim.unsent_ocpp); sim.unsent_ocpp.clear()
-  for x in queued: engine.ocpp_send(sim,x["type"],x["payload"].get("payload",{}))
+  engine.sync_ocpp_queue(sim)
  return time.time()
 
 @app.callback(Output("sink-logs","data"),Input("clear-logs","n_clicks"),prevent_initial_call=True)
@@ -592,8 +766,8 @@ def clear_logs(_):
  return time.time()
 
 # -------------------------------------------------------------------- charts
-EMPTY_LAYOUT={"template":"plotly_dark","height":380,"autosize":True,"paper_bgcolor":"rgba(0,0,0,0)",
-              "plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#a9b7cc"},"margin":{"l":35,"r":15,"t":52,"b":32},
+EMPTY_LAYOUT={"template":"plotly_white","height":380,"autosize":True,"paper_bgcolor":"rgba(0,0,0,0)",
+              "plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#42516a"},"margin":{"l":35,"r":15,"t":52,"b":32},
               "uirevision":"stable","xaxis":{"visible":False},"yaxis":{"visible":False}}
 
 def line(cols,title):
@@ -608,8 +782,8 @@ def line(cols,title):
           "y":[row.get(column,0) for row in rows],
           "line":{"color":colors[i%len(colors)],"width":2.2,"shape":"spline","smoothing":.55},
           "hovertemplate":f"{column}: %{{y:.2f}}<extra></extra>"} for i,column in enumerate(cols)]
- layout={"template":"plotly_dark","height":380,"autosize":True,"paper_bgcolor":"rgba(0,0,0,0)",
-         "plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#a9b7cc"},"title":{"text":title,"x":.02,"font":{"size":14}},
+ layout={"template":"plotly_white","height":380,"autosize":True,"paper_bgcolor":"rgba(0,0,0,0)",
+         "plot_bgcolor":"rgba(0,0,0,0)","font":{"color":"#42516a"},"title":{"text":title,"x":.02,"font":{"size":14}},
          "margin":{"l":35,"r":15,"t":52,"b":32},"uirevision":"stable","hovermode":"x unified",
          "legend":{"orientation":"h","y":1.02,"x":1,"xanchor":"right","yanchor":"bottom"},
          "xaxis":{"gridcolor":"rgba(140,165,205,.10)","zeroline":False,"automargin":True,"title":""},

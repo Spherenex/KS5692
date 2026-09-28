@@ -3,3 +3,4 @@ plotly>=5.22
 pandas>=2.0
 numpy>=1.24
 cryptography>=42.0
+websockets>=15.0

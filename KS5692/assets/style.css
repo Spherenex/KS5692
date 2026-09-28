@@ -13,6 +13,197 @@
   initial-value: 0;
 }
 
+/* ========================================================================
+   Verilog Simulation Studio desktop shell
+   ======================================================================== */
+.studio-shell {
+  --canvas: #f2f3f5;
+  --surface: #fff;
+  --surface-solid: #fff;
+  --surface-raised: #f7f8fa;
+  --border: #cbd1d8;
+  --border-bright: #aeb7c1;
+  --text: #202b38;
+  --text-secondary: #526174;
+  --text-muted: #6f7c8c;
+  --primary: #255ba8;
+  --primary-bright: #255ba8;
+  --telemetry: #167746;
+  --success: #17864d;
+  --warning: #a86400;
+  --danger: #b72e3e;
+  --purple: #634da0;
+  --shadow: 0 4px 14px rgba(25, 35, 47, .14);
+  --radius: 3px;
+  --Dash-Fill-Inverse-Strong: #fff;
+  --Dash-Fill-Interactive-Strong: #2b64ad;
+  --Dash-Fill-Interactive-Weak: #dce9f8;
+  --Dash-Fill-Primary-Hover: #edf3fa;
+  --Dash-Fill-Primary-Active: #dce9f8;
+  --Dash-Fill-Disabled: #e6e8eb;
+  --Dash-Stroke-Strong: #abb4be;
+  --Dash-Stroke-Weak: #d6dbe0;
+  --Dash-Text-Strong: #202b38;
+  --Dash-Text-Primary: #303d4d;
+  --Dash-Text-Weak: #667487;
+  --Dash-Text-Disabled: #9aa2ab;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--text);
+  background: #eef0f2;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.studio-titlebar {
+  height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  background: #f5f6f7;
+  border-bottom: 1px solid #d4d8dd;
+  font-size: 13px;
+  user-select: none;
+}
+
+.title-icon { color: #277c69; font-size: 16px; }
+.window-actions { margin-left: auto; display: flex; gap: 27px; padding-right: 7px; font-size: 17px; }
+
+.studio-menubar {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 9px;
+  background: #fff;
+  border-bottom: 1px solid #c9ced4;
+  font-size: 13px;
+  user-select: none;
+}
+
+.studio-menubar span { cursor: default; }
+.studio-menubar span:hover { color: #1e5b9f; }
+
+.studio-toolbar {
+  height: 67px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: linear-gradient(#fff, #f5f6f7);
+  border-bottom: 1px solid #aeb6bf;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+
+.tool-buttons { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.tool-buttons > i { width: 1px; height: 39px; margin: 0 8px; background: #c9ced4; }
+
+.studio-shell button.tool {
+  min-height: 43px;
+  padding: 5px 10px;
+  color: #222d38;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font: 500 12px "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+.studio-shell button.tool:hover { transform: none; color: #174f91; background: #e8f0fa; border-color: #b6c9df; box-shadow: none; }
+.studio-shell button.tool:disabled { color: #9299a1; opacity: .65; }
+.studio-shell button.tool.run { color: #12542d; font-weight: 700; }
+.studio-shell button.tool.validate { color: #245c35; font-weight: 700; }
+
+.tool-config { display: grid; grid-template-columns: auto 155px auto 105px auto 75px; align-items: center; gap: 5px; min-width: 530px; }
+.tool-config label { color: #536171; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.tool-config .dash-dropdown { min-width: 0; border-radius: 2px !important; }
+.tool-config .dash-dropdown-trigger { min-height: 32px !important; font-size: 11px; }
+
+.studio-body {
+  height: calc(100vh - 156px);
+  min-height: 420px;
+  display: grid;
+  grid-template-columns: 438px minmax(0, 1fr);
+  overflow: hidden;
+  background: #e6e8eb;
+}
+
+.studio-left { display: grid; grid-template-columns: 200px 238px; min-width: 0; background: #f4f5f6; border-right: 1px solid #949da7; }
+.dock { min-width: 0; overflow: auto; border-right: 1px solid #aeb6bf; background: #f7f8f9; }
+.dock h3, .console-dock h3 {
+  height: 34px;
+  margin: 0;
+  padding: 8px 9px;
+  color: #1f2c3a;
+  background: linear-gradient(#f6f7f8, #e5e8eb);
+  border-top: 1px solid #fff;
+  border-bottom: 1px solid #aab2bb;
+  font-size: 12px;
+}
+
+.tree { padding: 8px 7px; }
+.tree details, .source-tree details { margin: 0; }
+.tree summary, .source-tree summary { padding: 6px 3px; cursor: pointer; color: #26313c; font-size: 12px; list-style-position: inside; }
+.tree p { margin: 2px 0 7px 22px; color: #6b7682; font-size: 11px; }
+.source-tree { padding-bottom: 10px; }
+.source-head { display: block; padding: 10px 9px; background: #e8ebee; border-bottom: 1px solid #b7bec6; font-size: 12px; }
+.source-tree > details { padding: 5px 9px; }
+.source-tree details details { padding-left: 18px; }
+.source-tree span { display: block; padding: 5px 4px 5px 38px; color: #374453; font: 11px Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.source-tree span::before { content: "◇"; margin-right: 6px; color: #3971ae; }
+
+.studio-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: 42px minmax(180px, 1fr) 174px; overflow: hidden; background: #fff; }
+.studio-tabs { display: flex !important; align-items: stretch; overflow-x: auto; background: #edf0f2; border-bottom: 1px solid #9fa8b1; scrollbar-width: thin; }
+.studio-tabs .dash-options-list-option { flex: 0 0 auto; display: flex; align-items: center; min-height: 41px; margin: 0; padding: 0 15px; color: #374453; background: #eef0f2; border-right: 1px solid #b8bec5; font-size: 12px; cursor: pointer; }
+.studio-tabs .dash-options-list-option:hover { background: #f8f9fa; }
+.studio-tabs .dash-options-list-option.selected { color: #111d2b; background: #fff; font-weight: 700; border-top: 2px solid #2d64a6; }
+.studio-tabs input { display: none; }
+
+.workspace-content { min-height: 0; overflow: auto; padding: 14px 16px 24px; background: #fff; }
+.workspace-content .page { color: #283544; }
+.workspace-content h2 { color: #24569e; font-size: 23px; }
+.workspace-content .lede { color: #566578; }
+.workspace-content .eyebrow { color: #24569e; border-color: #b8cae1; background: #edf4fc; border-radius: 2px; }
+.workspace-content .kpi, .workspace-content .strip, .workspace-content .panel, .workspace-content .chart,
+.workspace-content .dash-spreadsheet-container { background: #fff; border-color: #c9d0d8 !important; box-shadow: 0 1px 3px rgba(35,45,55,.08); }
+.workspace-content .kpi { min-height: 82px; border-radius: 2px; }
+.workspace-content .kpi::after { background: #2d64a6; }
+.workspace-content .kpi small { color: #697788; }
+.workspace-content .panel summary { color: #263546; }
+.workspace-content .panel p { color: #5b6979; }
+.workspace-content .strip code, .workspace-content .strip.mono { color: #17613b; }
+
+.editor-title { display: flex; justify-content: space-between; padding: 9px 12px; background: #e9ecef; border: 1px solid #afb7c0; border-bottom: 0; color: #202d3a; font-size: 12px; }
+.editor-file { color: #5e6d7d; font: 11px Consolas, monospace; }
+.rtl-editor { min-height: 100%; margin: 0; padding: 10px 14px 40px; overflow: auto; color: #20262d; background: #fff; border: 1px solid #afb7c0; font: 13px/1.55 Consolas, "Cascadia Mono", monospace; tab-size: 4; white-space: pre; }
+.source-page { height: 100%; }
+
+.console-dock { min-height: 0; border-top: 1px solid #929ca6; background: #fff; overflow: hidden; }
+.console-tabs { height: 38px; display: flex; align-items: stretch; border-bottom: 1px solid #b5bcc4; }
+.console-tabs span, .console-tabs b { min-width: 90px; padding: 10px 14px; border-right: 1px solid #c7ccd2; font-size: 11px; font-weight: 500; }
+.console-tabs b { color: #172433; background: #fff; border-top: 2px solid #2f67a8; font-weight: 700; }
+.console-dock pre { height: 92px; margin: 0; padding: 9px 12px; overflow: auto; color: #283541; background: #fff; font: 11px/1.45 Consolas, monospace; white-space: pre-wrap; }
+
+.studio-statusbar { height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 0 9px; color: #344150; background: #f4f5f6; border-top: 1px solid #aeb5bd; font-size: 11px; }
+.status-right { display: flex; align-items: center; gap: 17px; }
+.studio-statusbar .status { padding: 3px 8px; border-radius: 2px; font-size: 9px; }
+
+@media (max-width: 1250px) {
+  .studio-body { grid-template-columns: 310px minmax(0, 1fr); }
+  .studio-left { grid-template-columns: 145px 165px; }
+  .tool-config { display: none; }
+}
+
+@media (max-width: 850px) {
+  .studio-body { grid-template-columns: minmax(0, 1fr); }
+  .studio-left { display: none; }
+  .studio-toolbar { overflow-x: auto; }
+  .studio-menubar { gap: 12px; overflow: hidden; }
+}
+
 :root {
   --canvas: #05070e;
   --canvas-soft: #0a0e1a;

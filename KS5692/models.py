@@ -41,4 +41,8 @@ class EthernetPacket:
     tsn_enqueue_timestamp: float = 0
     tsn_dequeue_timestamp: float = 0
     receive_timestamp: float = 0
-
+    queue_wait_ms: float = 0
+    transmission_time_ms: float = 0
+    macsec_nonce: str = ""
+    macsec_ciphertext: str = ""
+    macsec_tag: str = ""
